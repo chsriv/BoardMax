@@ -47,12 +47,13 @@ export default function ChatInterface() {
       }
     }
 
-    // SECURITY GUARDRAIL 1: Input Length Validation (Max 500 chars)
-    if (cleanQuery.length > 500) {
+    // SECURITY GUARDRAIL 1: Input Length Validation (Max 500 words)
+    const wordCount = cleanQuery.trim().split(/\s+/).length;
+    if (wordCount > 500) {
       const errorMsg: Message = { 
         id: Date.now().toString(), 
         role: "ai", 
-        content: "⛔ **Security Block**: Query too long (max 500 characters). Please shorten your question." 
+        content: `⛔ **Security Block**: Query too long (${wordCount} words, max 500 words). Please shorten your question.` 
       };
       setMessages((prev) => [...prev, errorMsg]);
       return;

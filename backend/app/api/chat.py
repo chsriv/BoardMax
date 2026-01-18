@@ -57,8 +57,9 @@ def validate_safety(query: str):
     """Checks for prompt injection and obvious policy violations."""
     
     # 1. Length Check (Prevent DOS)
-    if len(query) > 500:
-        raise HTTPException(status_code=400, detail="Query too long (Max 500 chars). Keep it concise.")
+    word_count = len(query.split())
+    if word_count > 500:
+        raise HTTPException(status_code=400, detail=f"Query too long ({word_count} words, max 500 words). Keep it concise.")
 
     # 2. Prompt Injection Keywords
     injection_patterns = [
