@@ -21,6 +21,8 @@ llm = ChatGroq(
 class ChatRequest(BaseModel):
     query: str
     subject: str = "social-science"
+    mode: str = "answer"  # "answer" or "evaluate"
+    student_answer: str = ""  # Only used in evaluate mode
 
 class ChatResponse(BaseModel):
     answer: str
@@ -80,9 +82,12 @@ async def ask_question(request: Request, chat_req: ChatRequest):
     try:
         # 1. Sanitize (XSS Defense)
         clean_query = bleach.clean(chat_req.query, strip=True)
+        clean_student_answer = bleach.clean(chat_req.student_answer, strip=True) if chat_req.student_answer else ""
         
-        # 2. Validate (Intent Defense) - NEW!
+        # 2. Validate (Intent Defense)
         validate_safety(clean_query)
+        if clean_student_answer:
+            validate_safety(clean_student_answer)
         
         # 3. RAG Search - Retrieve relevant marking scheme chunks
         print(f"🔍 Searching Pinecone for: '{clean_query}' | Subject: {chat_req.subject}")
@@ -109,19 +114,37 @@ async def ask_question(request: Request, chat_req: ChatRequest):
                 sources=[]
             )
 
-        # 4. Generate answer using ONLY marking scheme context
-        print("🤖 Generating answer from marking scheme context...")
-        messages = [
-            SystemMessage(content=SYSTEM_PROMPT),
-            HumanMessage(content=f"""MARKING SCHEME CONTEXT (Official CBSE):
+        # 4. Generate response based on mode
+        if chat_req.mode == "evaluate":
+            print(f"📝 Evaluating student answer ({len(clean_student_answer)} chars)...")
+            messages = [
+                SystemMessage(content=EVALUATION_PROMPT),
+                HumanMessage(content=f"""MARKING SCHEME CONTEXT (Official CBSE):
+{context_text}
+
+QUESTION: {clean_query}
+
+STUDENT'S ANSWER:
+{clean_student_answer}
+
+INSTRUCTION: Evaluate the student's answer strictly against the MARKING SCHEME CONTEXT. Assign marks and identify missing points.""")
+            ]
+            response = llm.invoke(messages)
+            print(f"✅ Evaluation complete ({len(response.content)} chars)")
+        else:
+            # Answer mode (default)
+            print("🤖 Generating answer from marking scheme context...")
+            messages = [
+                SystemMessage(content=SYSTEM_PROMPT),
+                HumanMessage(content=f"""MARKING SCHEME CONTEXT (Official CBSE):
 {context_text}
 
 STUDENT QUESTION: {clean_query}
 
 INSTRUCTION: Answer this question using ONLY the information from the MARKING SCHEME CONTEXT above. Do not add any external knowledge. If the context doesn't contain enough information, say so clearly.""")
-        ]
-        response = llm.invoke(messages)
-        print(f"✅ Answer generated ({len(response.content)} chars)")
+            ]
+            response = llm.invoke(messages)
+            print(f"✅ Answer generated ({len(response.content)} chars)")
         
         return ChatResponse(
             answer=response.content, 

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion"; 
-import { Send, Sparkles, Loader2, GraduationCap } from "lucide-react";
+import { Send, Sparkles, Loader2, GraduationCap, MessageSquare, CheckCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
@@ -15,7 +15,9 @@ interface Message {
 }
 
 export default function ChatInterface() {
+  const [mode, setMode] = useState<"answer" | "evaluate">("answer");
   const [query, setQuery] = useState("");
+  const [studentAnswer, setStudentAnswer] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -30,6 +32,20 @@ export default function ChatInterface() {
   const handleSearch = async () => {
     const cleanQuery = query.trim();
     if (!cleanQuery) return;
+
+    // In evaluate mode, also check student answer
+    if (mode === "evaluate") {
+      const cleanStudentAnswer = studentAnswer.trim();
+      if (!cleanStudentAnswer) {
+        const errorMsg: Message = { 
+          id: Date.now().toString(), 
+          role: "ai", 
+          content: "⚠️ Please provide your answer to evaluate." 
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+        return;
+      }
+    }
 
     // SECURITY GUARDRAIL 1: Input Length Validation (Max 500 chars)
     if (cleanQuery.length > 500) {
@@ -66,9 +82,14 @@ export default function ChatInterface() {
     }
 
     // 1. Add User Message
-    const userMsg: Message = { id: Date.now().toString(), role: "user", content: cleanQuery };
+    const userContent = mode === "evaluate" 
+      ? `**Question:** ${cleanQuery}\n\n**My Answer:**\n${studentAnswer.trim()}`
+      : cleanQuery;
+    
+    const userMsg: Message = { id: Date.now().toString(), role: "user", content: userContent };
     setMessages((prev) => [...prev, userMsg]);
     setQuery("");
+    setStudentAnswer("");
     setIsLoading(true);
 
     try {
@@ -76,7 +97,12 @@ export default function ChatInterface() {
       const res = await fetch("http://localhost:8000/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: cleanQuery, subject: "social-science" }),
+        body: JSON.stringify({ 
+          query: cleanQuery, 
+          subject: "social-science",
+          mode: mode,
+          student_answer: mode === "evaluate" ? studentAnswer.trim() : ""
+        }),
       });
 
       const data = await res.json();
@@ -129,6 +155,34 @@ export default function ChatInterface() {
         <Badge variant="secondary" className="bg-blue-100 text-blue-700 px-3 py-1 hover:bg-blue-200">Social Science</Badge>
       </motion.div>
 
+      {/* MODE TOGGLE */}
+      <div className="flex gap-2 mb-4">
+        <Button
+          onClick={() => setMode("answer")}
+          variant={mode === "answer" ? "default" : "outline"}
+          className={`flex-1 h-12 rounded-xl transition-all ${
+            mode === "answer" 
+              ? "bg-blue-600 hover:bg-blue-700 text-white shadow-md" 
+              : "bg-white hover:bg-blue-50 text-slate-700"
+          }`}
+        >
+          <MessageSquare className="w-4 h-4 mr-2" />
+          Get Answer
+        </Button>
+        <Button
+          onClick={() => setMode("evaluate")}
+          variant={mode === "evaluate" ? "default" : "outline"}
+          className={`flex-1 h-12 rounded-xl transition-all ${
+            mode === "evaluate" 
+              ? "bg-green-600 hover:bg-green-700 text-white shadow-md" 
+              : "bg-white hover:bg-green-50 text-slate-700"
+          }`}
+        >
+          <CheckCircle className="w-4 h-4 mr-2" />
+          Evaluate My Answer
+        </Button>
+      </div>
+
       {/* CHAT AREA */}
       <Card className="flex-1 overflow-hidden bg-white/80 backdrop-blur-md border-slate-200 shadow-xl flex flex-col rounded-3xl">
         <div className="flex-1 overflow-y-auto p-6 space-y-6" ref={scrollRef}>
@@ -139,8 +193,17 @@ export default function ChatInterface() {
                 className="h-full flex flex-col items-center justify-center text-slate-400"
               >
                 <Sparkles className="w-16 h-16 mb-4 opacity-10 text-blue-600" />
-                <p className="text-lg font-medium text-slate-500">Ask a question to start coaching...</p>
-                <p className="text-sm opacity-50">Try: "Explain the Non-Cooperation Movement"</p>
+                {mode === "answer" ? (
+                  <>
+                    <p className="text-lg font-medium text-slate-500">Ask a question to get the marking scheme answer...</p>
+                    <p className="text-sm opacity-50">Try: "Explain the Non-Cooperation Movement"</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-lg font-medium text-slate-500">Get your answer evaluated by CBSE standards...</p>
+                    <p className="text-sm opacity-50">Provide the question and your answer to receive marks and feedback</p>
+                  </>
+                )}
               </motion.div>
             )}
 
@@ -180,21 +243,36 @@ export default function ChatInterface() {
         </div>
 
         {/* INPUT AREA */}
-        <div className="p-4 bg-white/50 border-t border-slate-100 flex gap-3 backdrop-blur-sm">
-          <Input 
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-            placeholder="Type your question..." 
-            className="h-12 border-slate-200 focus-visible:ring-blue-500 rounded-xl bg-white shadow-sm text-base"
-          />
-          <Button 
-            onClick={handleSearch} 
-            disabled={isLoading} 
-            className="h-12 w-12 rounded-xl bg-blue-600 hover:bg-blue-700 transition-all shadow-md hover:shadow-lg hover:shadow-blue-200"
-          >
-            <Send className="w-5 h-5" />
-          </Button>
+        <div className="p-4 bg-white/50 border-t border-slate-100 backdrop-blur-sm space-y-3">
+          {mode === "evaluate" && (
+            <textarea
+              value={studentAnswer}
+              onChange={(e) => setStudentAnswer(e.target.value)}
+              placeholder="Paste your answer here to get it evaluated..."
+              className="w-full h-24 p-3 border border-slate-200 rounded-xl bg-white shadow-sm text-base resize-none focus:outline-none focus:ring-2 focus:ring-green-500"
+            />
+          )}
+          
+          <div className="flex gap-3">
+            <Input 
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && handleSearch()}
+              placeholder={mode === "evaluate" ? "Type the question..." : "Type your question..."} 
+              className={`h-12 border-slate-200 focus-visible:ring-${mode === "evaluate" ? "green" : "blue"}-500 rounded-xl bg-white shadow-sm text-base`}
+            />
+            <Button 
+              onClick={handleSearch} 
+              disabled={isLoading} 
+              className={`h-12 w-12 rounded-xl transition-all shadow-md hover:shadow-lg ${
+                mode === "evaluate"
+                  ? "bg-green-600 hover:bg-green-700 hover:shadow-green-200"
+                  : "bg-blue-600 hover:bg-blue-700 hover:shadow-blue-200"
+              }`}
+            >
+              <Send className="w-5 h-5" />
+            </Button>
+          </div>
         </div>
       </Card>
     </div>
