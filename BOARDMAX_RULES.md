@@ -1,58 +1,71 @@
-# PROJECT CONTEXT: BoardMax (CBSE Answer Optimizer)
+# BOARDMAX PROJECT EXECUTION PLAN
 
-## 1. PROJECT GOAL
-To build a RAG-based AI application that helps Class 10 CBSE students format their answers according to official Marking Schemes to maximize exam scores.
-**Deadline:** Feb 5, 2026 (Strict MVP Launch).
+## 1. PROJECT OVERVIEW
+**Product:** BoardMax (CBSE Answer Optimizer)
+**Goal:** A RAG-based web app that rewrites student answers into "Official Marking Scheme" format.
+**Role:** You (Copilot) are the Lead Developer. I (User) am the Project Manager.
+**Deadline:** Feb 5, 2026.
 
-## 2. TECH STACK (STRICT)
+## 2. TECHNOLOGY STACK (NON-NEGOTIABLE)
+* **Backend:** Python 3.11, FastAPI, Uvicorn.
+* **AI/ML:** LangChain, Pinecone (Vector DB), Groq (Llama 3).
 * **Frontend:** Next.js 14 (App Router), TypeScript, Tailwind CSS, shadcn/ui.
-* **Backend:** Python 3.11+, FastAPI.
-* **AI/ML:** LangChain (Python), Pinecone (Vector DB), Groq API (Llama 3) or Gemini API.
-* **Database:** Pinecone (Vectors only). No relational DB for MVP.
-* **Deployment:** Vercel (Frontend), Render (Backend).
+* **Security:** `bleach` (Sanitization), `slowapi` (Rate Limiting).
 
-## 3. ARCHITECTURE RULES (SCALABLE)
-* **Monorepo Structure:** All code in one repo. `frontend/` and `backend/` directories.
-* **RAG Pipeline (Ingestion):**
-    * Process: Ingest PDF -> Clean Text -> Chunk -> **ADD METADATA** -> Pinecone.
-    * **Metadata Strategy:** Every chunk MUST have a `subject` tag (e.g., `{"subject": "history"}`, `{"subject": "physics"}`).
-* **RAG Pipeline (Retrieval):**
-    * The API Query MUST accept a `subject` parameter.
-    * Vector Search MUST apply a **Metadata Filter** matches that subject. (e.g., `filter={ "subject": "physics" }`).
-* **Security (Cybersec Focus):**
-    * Input Sanitization: Strip HTML/Script tags using `bleach`.
-    * Rate Limiting: 5 requests/min per IP.
-    * Prompt Injection Defense: Validate input length/keywords.
+## 3. ENGINEERING PLAYBOOK
 
-## 4. CODING STANDARDS
+### A. Coding Rules
+1.  **Strict Typing:** Python MUST use Type Hints (`x: int`). TypeScript MUST NOT use `any`.
+2.  **Error Handling:** API endpoints must never crash. Wrap external calls (Groq/Pinecone) in `try/except` blocks and return HTTP 500 with a specific error message.
+3.  **Environment Variables:** Never hardcode keys. Use `os.getenv()`.
 
-### Python (Backend)
-* **Type Hinting:** MANDATORY. Use `def func(x: str) -> int:` syntax.
-* **Pydantic:** Use Pydantic models for all API request/response bodies.
-* **Async:** Use `async def` for all route handlers.
-* **Docstrings:** All complex functions must have a docstring explaining inputs/outputs.
+### B. AI Playbook (RAG)
+1.  **Ingestion:** PDF -> Text -> Chunk (500 chars) -> Metadata (`subject`) -> Vector DB.
+2.  **Retrieval:** Always filter search by `subject`. Retrieve top 3 chunks (`k=3`).
+3.  **System Prompt:** "Role: CBSE Grader. Task: Maximize marks using provided context only. Format: Bullet points with bold keywords."
+* **Model:** llama-3.3-70b-versatile
 
-### TypeScript (Frontend)
-* **Strict Types:** No `any`. Define Interfaces for all props and API responses.
-* **Components:** Functional components only. Use Hooks (`useState`, `useEffect`).
-* **Styling:** Utility-first CSS (Tailwind). Avoid custom CSS files.
+---
 
-## 5. SYSTEM PROMPT (FOR AI GENERATION)
-Use this prompt structure for all LLM calls:
-"ROLE: Expert CBSE Grader.
-INSTRUCTION: Answer using ONLY the provided context. Format answers in bullet points. Bold keywords that carry marks. If context is missing, admit it.
-TONE: Formal, Academic."
+## 4. EXECUTION ROADMAP (STEP-BY-STEP)
 
-## 6. FOLDER STRUCTURE
-root/
-├── data/ (PDFs and TXT files)
-├── backend/
-│   ├── app/
-│   │   ├── main.py
-│   │   ├── api/ (endpoints)
-│   │   └── services/ (rag_logic.py)
-├── frontend/
-│   ├── src/
-│   │   ├── app/ (pages)
-│   │   └── components/
-└── README.md
+### PHASE 1: THE BRAIN (BACKEND) [STATUS: IN PROGRESS]
+- [x] Set up Folder Structure (`backend/`, `data/`).
+- [x] Configure Environment (`.env`, `requirements.txt`).
+- [x] Build Ingestion Engine (`rag_engine.py`).
+- [x] Script to Upload PDFs (`ingest.py`).
+- [ ] **CURRENT TASK: Stabilize API Endpoint (`chat.py`).**
+    - *Issue:* API returns generic 500 Error.
+    - *Fix:* Add Try/Except blocks to catch Groq/Pinecone errors and print logs to terminal.
+    - *Goal:* Successful JSON response from `/api/ask`.
+
+### PHASE 2: THE FACE (FRONTEND SETUP) [STATUS: PENDING]
+- [ ] Initialize Next.js App (`npx create-next-app@latest`).
+- [ ] Install Shadcn UI (`npx shadcn-ui@latest init`).
+- [ ] Configure Tailwind for a clean, academic look (Blue/White theme).
+
+### PHASE 3: THE INTERFACE (COMPONENTS) [STATUS: PENDING]
+- [ ] Build `ChatInterface.tsx`:
+    - Input box for student question.
+    - Dropdown for Subject Selection.
+    - Message list (User vs. AI).
+- [ ] Implement Markdown Rendering (to show Bold text/Bullet points).
+
+### PHASE 4: INTEGRATION [STATUS: PENDING]
+- [ ] Connect Frontend to Backend (`POST /api/ask`).
+- [ ] Handle Loading States (Skeleton loaders while AI thinks).
+- [ ] specific Error Messages ("Server busy", "Topic not found").
+
+### PHASE 5: LAUNCH [STATUS: PENDING]
+- [ ] Deploy Backend to Render.
+- [ ] Deploy Frontend to Vercel.
+- [ ] Verify SSL and Domain connection.
+
+---
+
+## 5. DEBUGGING PROTOCOL
+If the server crashes:
+1.  Do NOT guess.
+2.  Add `print()` statements before the line that likely failed.
+3.  Check `.env` loading order in `main.py`.
+4.  Verify API Keys in `debug_system.py`.
