@@ -1,159 +1,203 @@
+"""
+Chat API Endpoint for BoardMax (CBSE Answer Optimizer)
+Handles answer optimization requests using RAG + Groq LLM
+"""
+
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+from typing import Literal
 import os
-import bleach
-import re
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
-from langchain_groq import ChatGroq
-from langchain_core.messages import SystemMessage, HumanMessage
+from groq import Groq
 from app.services.rag_engine import RAGEngine
 
 router = APIRouter()
 
+# Initialize RAG Engine (singleton-like pattern)
 rag_engine = RAGEngine()
-rag_engine.initialize_vector_db()
 
-llm = ChatGroq(
-    temperature=0.1,  # Lower temperature for more accurate marking scheme adherence
-    model_name="llama-3.3-70b-versatile",
-    api_key=os.getenv("GROQ_API_KEY")
-)
+# Pydantic models for request/response validation
+class AskRequest(BaseModel):
+    """Request model for the /ask endpoint"""
+    question: str = Field(..., min_length=10, max_length=2000, description="Student's answer to be optimized")
+    subject: str = Field(..., description="CBSE subject (e.g., Physics, Chemistry, Biology, Math)")
+    mode: Literal["optimizer", "evaluator"] = Field(default="optimizer", description="Mode: optimizer (rewrite answer) or evaluator (grade answer)")
 
-class ChatRequest(BaseModel):
-    query: str
-    subject: str = "social-science"
-    mode: str = "answer"  # "answer" or "evaluate"
-    student_answer: str = ""  # Only used in evaluate mode
+class AskResponse(BaseModel):
+    """Response model for the /ask endpoint"""
+    answer: str = Field(..., description="AI-generated optimized answer or evaluation")
+    mode: str = Field(..., description="Mode used for processing")
+    subject: str = Field(..., description="Subject context")
+    sources_count: int = Field(..., description="Number of relevant context chunks used")
 
-class ChatResponse(BaseModel):
-    answer: str
-    sources: list
 
-SYSTEM_PROMPT = """
-ROLE: You are a CBSE Board Examiner grading Class 10 Social Science answers.
-GOAL: Provide ONLY the answer that matches the OFFICIAL CBSE MARKING SCHEME.
-
-CRITICAL RULES:
-1. Use ONLY the provided CONTEXT from the uploaded marking scheme PDFs.
-2. DO NOT use your general knowledge or add external information.
-3. If the CONTEXT doesn't contain the answer, respond: "❌ This question is not found in the uploaded marking schemes."
-4. Format answers in bullet points with **bold keywords** that carry marks.
-5. For questions worth different marks (1M, 3M, 5M), adjust detail level:
-   - 1 Mark: 1 concise point
-   - 3 Marks: 3 distinct points
-   - 5 Marks: 5 detailed points with examples/dates
-6. Include exact dates, names, and terms from the marking scheme.
-7. Use formal academic tone matching CBSE standards.
-
-STRUCTURE YOUR RESPONSE:
-### 📝 Full Marks Answer
-(Bullet points with **bold keywords**)
-
-### 🎯 Key Terms for Marks
-(List 2-3 must-mention keywords from marking scheme)
-"""
-
-# --- SECURITY: THE GATEKEEPER ---
-def validate_safety(query: str):
-    """Checks for prompt injection and obvious policy violations."""
+@router.post("/ask", response_model=AskResponse)
+async def ask_question(request: AskRequest):
+    """
+    Main endpoint for answer optimization/evaluation.
     
-    # 1. Length Check (Prevent DOS)
-    word_count = len(query.split())
-    if word_count > 500:
-        raise HTTPException(status_code=400, detail=f"Query too long ({word_count} words, max 500 words). Keep it concise.")
-
-    # 2. Prompt Injection Keywords
-    injection_patterns = [
-        r"ignore previous instructions",
-        r"forget your instructions",
-        r"you are not",
-        r"system override",
-        r"roleplay as"
-    ]
-    for pattern in injection_patterns:
-        if re.search(pattern, query, re.IGNORECASE):
-            raise HTTPException(status_code=403, detail="⚠️ Security Alert: Prompt Injection detected.")
-
-    # 3. Profanity/Offensive Filter (Basic List)
-    unsafe_keywords = ["kill", "bomb", "suicide", "hack", "stupid"] # Add more as needed
-    if any(word in query.lower() for word in unsafe_keywords):
-        raise HTTPException(status_code=400, detail="⚠️ Content Policy: Please ask academic questions only.")
-
-@router.post("/ask", response_model=ChatResponse)
-async def ask_question(request: Request, chat_req: ChatRequest):
+    Mode: optimizer - Rewrites student answer in Official Marking Scheme format
+    Mode: evaluator - Evaluates student answer and provides feedback
+    """
     try:
-        # 1. Sanitize (XSS Defense)
-        clean_query = bleach.clean(chat_req.query, strip=True)
-        clean_student_answer = bleach.clean(chat_req.student_answer, strip=True) if chat_req.student_answer else ""
+        print(f"\n📥 Request received:")
+        print(f"   - Subject: {request.subject}")
+        print(f"   - Mode: {request.mode}")
+        print(f"   - Question length: {len(request.question)} chars")
         
-        # 2. Validate (Intent Defense)
-        validate_safety(clean_query)
-        if clean_student_answer:
-            validate_safety(clean_student_answer)
-        
-        # 3. RAG Search - Retrieve relevant marking scheme chunks
-        print(f"🔍 Searching Pinecone for: '{clean_query}' | Subject: {chat_req.subject}")
-        docs = rag_engine.search(clean_query, chat_req.subject, k=5)  # Increased from 3 to 5 for better context
-        
-        if not docs or len(docs) == 0:
-            print("⚠️ No documents found in Pinecone for this query")
-            return ChatResponse(
-                answer="❌ **Not Found in Marking Schemes**\n\nThis question doesn't appear in the uploaded CBSE marking scheme PDFs. Please try rephrasing or ask about topics from the syllabus.",
-                sources=[]
+        # Step 1: Initialize Vector DB connection (lazy initialization)
+        try:
+            rag_engine.initialize_vector_db()
+        except Exception as e:
+            print(f"❌ Vector DB initialization failed: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database connection failed. Please check Pinecone configuration. Error: {str(e)}"
             )
         
-        # Log retrieved chunks for debugging
-        print(f"✅ Retrieved {len(docs)} chunks from marking schemes")
-        for i, doc in enumerate(docs, 1):
-            print(f"  Chunk {i} preview: {doc.page_content[:100]}...")
-        
-        context_text = "\n\n".join([d.page_content for d in docs])
-        
-        if not context_text.strip():
-            print("⚠️ Context is empty after retrieval")
-            return ChatResponse(
-                answer="❌ **Not Found in Marking Schemes**\n\nThis question doesn't appear in the uploaded CBSE marking scheme PDFs.",
-                sources=[]
+        # Step 2: Search for relevant context from marking schemes
+        try:
+            relevant_docs = rag_engine.search(
+                query=request.question,
+                subject=request.subject,
+                k=3
             )
-
-        # 4. Generate response based on mode
-        if chat_req.mode == "evaluate":
-            print(f"📝 Evaluating student answer ({len(clean_student_answer)} chars)...")
-            messages = [
-                SystemMessage(content=EVALUATION_PROMPT),
-                HumanMessage(content=f"""MARKING SCHEME CONTEXT (Official CBSE):
-{context_text}
-
-QUESTION: {clean_query}
-
-STUDENT'S ANSWER:
-{clean_student_answer}
-
-INSTRUCTION: Evaluate the student's answer strictly against the MARKING SCHEME CONTEXT. Assign marks and identify missing points.""")
-            ]
-            response = llm.invoke(messages)
-            print(f"✅ Evaluation complete ({len(response.content)} chars)")
-        else:
-            # Answer mode (default)
-            print("🤖 Generating answer from marking scheme context...")
-            messages = [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=f"""MARKING SCHEME CONTEXT (Official CBSE):
-{context_text}
-
-STUDENT QUESTION: {clean_query}
-
-INSTRUCTION: Answer this question using ONLY the information from the MARKING SCHEME CONTEXT above. Do not add any external knowledge. If the context doesn't contain enough information, say so clearly.""")
-            ]
-            response = llm.invoke(messages)
-            print(f"✅ Answer generated ({len(response.content)} chars)")
+            
+            if not relevant_docs:
+                print(f"⚠️ No relevant documents found for subject: {request.subject}")
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No marking scheme data found for subject '{request.subject}'. Please ensure PDFs are uploaded."
+                )
+            
+            # Combine retrieved context
+            context = "\n\n".join([doc.page_content for doc in relevant_docs])
+            print(f"✅ Retrieved {len(relevant_docs)} relevant chunks")
+            
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions as-is
+        except Exception as e:
+            print(f"❌ Search failed: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Search operation failed: {str(e)}"
+            )
         
-        return ChatResponse(
-            answer=response.content, 
-            sources=[d.metadata.get("subject", "unknown") for d in docs]
+        # Step 3: Create system prompt based on mode
+        if request.mode == "optimizer":
+            system_prompt = """You are an expert CBSE examiner and answer optimizer.
+
+Your task: Transform the student's answer into the perfect "Official Marking Scheme" format that maximizes marks.
+
+Rules:
+1. Use ONLY information from the provided context (marking scheme)
+2. Format: Use bullet points with **bold keywords**
+3. Be concise and precise - use marking scheme language
+4. Include all key points that would earn marks
+5. Maintain factual accuracy from the context
+
+Context from Official Marking Schemes:
+{context}
+
+Student's Answer:
+{question}
+
+Provide the optimized answer in bullet-point format with bold keywords:"""
+        
+        else:  # evaluator mode
+            system_prompt = """You are an expert CBSE examiner evaluating a student's answer.
+
+Your task: Evaluate the student's answer against the official marking scheme and provide constructive feedback.
+
+Evaluation criteria:
+1. Correctness: Are the concepts accurate?
+2. Completeness: Are all key points covered?
+3. Clarity: Is the answer well-structured?
+4. Keywords: Are important CBSE keywords used?
+
+Context from Official Marking Schemes:
+{context}
+
+Student's Answer to Evaluate:
+{question}
+
+Provide evaluation in this format:
+**Score Estimate:** [X/Y marks]
+**Strengths:**
+- [List good points]
+
+**Missing Key Points:**
+- [List what's missing from marking scheme]
+
+**Suggestions for Improvement:**
+- [Actionable advice]"""
+        
+        # Format the prompt with context and question
+        formatted_prompt = system_prompt.format(
+            context=context,
+            question=request.question
+        )
+        
+        # Step 4: Call Groq LLM
+        try:
+            groq_api_key = os.getenv('GROQ_API_KEY')
+            if not groq_api_key:
+                raise ValueError("GROQ_API_KEY not found in environment variables")
+            
+            client = Groq(api_key=groq_api_key)
+            
+            print(f"🤖 Calling Groq LLM (llama-3.3-70b-versatile)...")
+            completion = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are an expert CBSE examiner helping students write better answers."
+                    },
+                    {
+                        "role": "user",
+                        "content": formatted_prompt
+                    }
+                ],
+                temperature=0.3,  # Lower temperature for more consistent, factual responses
+                max_tokens=1024,
+                top_p=1,
+                stream=False
+            )
+            
+            ai_response = completion.choices[0].message.content
+            print(f"✅ AI Response generated ({len(ai_response)} chars)")
+            
+        except Exception as e:
+            print(f"❌ Groq API call failed: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"AI processing failed. Please check Groq API configuration. Error: {str(e)}"
+            )
+        
+        # Step 5: Return response
+        return AskResponse(
+            answer=ai_response,
+            mode=request.mode,
+            subject=request.subject,
+            sources_count=len(relevant_docs)
+        )
+    
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        # Catch-all for unexpected errors
+        print(f"❌ Unexpected error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}"
         )
 
-    except HTTPException as he:
-        raise he  # Pass the security error directly to Frontend
-    except Exception as e:
-        print(f"❌ SERVER ERROR: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal Server Error")
+
+@router.get("/health")
+async def health_check():
+    """Health check endpoint for the chat API"""
+    return {
+        "status": "healthy",
+        "service": "BoardMax Chat API",
+        "endpoints": ["/ask", "/health"]
+    }
